@@ -4,12 +4,18 @@ MongoDB database configuration and setup for Mergington High School API
 
 from pymongo import MongoClient
 from argon2 import PasswordHasher, exceptions as argon2_exceptions
+from datetime import datetime, timedelta
+import secrets
 
 # Connect to MongoDB
 client = MongoClient('mongodb://localhost:27017/')
 db = client['mergington_high']
 activities_collection = db['activities']
 teachers_collection = db['teachers']
+announcements_collection = db['announcements']
+sessions_collection = db['sessions']
+
+SESSION_DURATION_HOURS = 8
 
 # Methods
 
@@ -36,6 +42,43 @@ def verify_password(hashed_password: str, plain_password: str) -> bool:
         return False
 
 
+def create_session(username: str) -> str:
+    """Create a signed-in session token for a teacher account."""
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(hours=SESSION_DURATION_HOURS)
+
+    sessions_collection.update_one(
+        {"username": username},
+        {
+            "$set": {
+                "username": username,
+                "token": token,
+                "expires_at": expires_at,
+            }
+        },
+        upsert=True,
+    )
+    return token
+
+
+def validate_session_token(token: str):
+    """Validate a session token and return the teacher document when valid."""
+    if not token:
+        return None
+
+    session = sessions_collection.find_one({"token": token})
+    if not session:
+        return None
+
+    expires_at = session.get("expires_at")
+    if not expires_at or expires_at < datetime.utcnow():
+        sessions_collection.delete_one({"_id": session["_id"]})
+        return None
+
+    teacher = teachers_collection.find_one({"_id": session.get("username")})
+    return teacher
+
+
 def init_database():
     """Initialize database if empty"""
 
@@ -49,6 +92,11 @@ def init_database():
         for teacher in initial_teachers:
             teachers_collection.insert_one(
                 {"_id": teacher["username"], **teacher})
+
+    # Initialize announcements if empty
+    if announcements_collection.count_documents({}) == 0:
+        for announcement in initial_announcements:
+            announcements_collection.insert_one(announcement)
 
 
 # Initial database if empty
@@ -205,5 +253,15 @@ initial_teachers = [
         "display_name": "Principal Martinez",
         "password": hash_password("admin789"),
         "role": "admin"
+    }
+]
+
+initial_announcements = [
+    {
+        "_id": "welcome-spring-activities",
+        "message": "Spring activity registration is open. Sign up before seats fill up!",
+        "start_date": None,
+        "expiration_date": "2099-12-31",
+        "created_by": "principal",
     }
 ]
