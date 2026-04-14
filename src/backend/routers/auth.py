@@ -2,10 +2,15 @@
 Authentication endpoints for the High School Management System API
 """
 
-from fastapi import APIRouter, HTTPException
-from typing import Dict, Any
+from fastapi import APIRouter, Header, HTTPException
+from typing import Dict, Any, Optional
 
-from ..database import teachers_collection, verify_password
+from ..database import (
+    create_session,
+    teachers_collection,
+    validate_session_token,
+    verify_password,
+)
 
 router = APIRouter(
     prefix="/auth",
@@ -24,18 +29,33 @@ def login(username: str, password: str) -> Dict[str, Any]:
         raise HTTPException(
             status_code=401, detail="Invalid username or password")
 
+    token = create_session(teacher["username"])
+
     # Return teacher information (excluding password)
     return {
         "username": teacher["username"],
         "display_name": teacher["display_name"],
-        "role": teacher["role"]
+        "role": teacher["role"],
+        "token": token,
     }
 
 
 @router.get("/check-session")
-def check_session(username: str) -> Dict[str, Any]:
-    """Check if a session is valid by username"""
-    teacher = teachers_collection.find_one({"_id": username})
+def check_session(
+    username: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Check whether an existing session is valid.
+
+    Supports Bearer token validation and a username fallback for compatibility.
+    """
+    teacher = None
+
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+        teacher = validate_session_token(token)
+    elif username:
+        teacher = teachers_collection.find_one({"_id": username})
 
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
